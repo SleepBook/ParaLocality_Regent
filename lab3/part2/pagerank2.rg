@@ -6,9 +6,9 @@ local PageRankConfig = require("pagerank_config")
 local c = regentlib.c
 
 fspace Page {
-  rank         : double,
-  next_rank : double,
-  edge_num : int
+    rank: double,
+    next_rank: double,
+    edge_num: uint64
 }
 
 --
@@ -30,10 +30,6 @@ terra read_ids(f : &c.FILE, page_ids : &uint32)
 end
 
 task initialize_graph(r_pages   : region(Page),
-                      --
-                      -- TODO: Give the right region type here.
-                      -- interesting definition here
-                      --
                       r_links   : region(Link(r_pages)),
                       damp      : double,
                       num_pages : uint64,
@@ -44,7 +40,7 @@ do
   var ts_start = c.legion_get_current_time_in_micros()
   for page in r_pages do
     page.rank = 1.0 / num_pages
-    -- TODO: Initialize your fields if you need
+    page.next_rank =  (1.0 - damp)/num_pages
     page.edge_num = 0
   end
 
@@ -60,7 +56,6 @@ do
     --
     link.src = src_page
     link.dst = dst_page
-
     src_page.edge_num += 1
   end
   c.fclose(f)
@@ -73,16 +68,15 @@ end
 --
 
 task checkDiff(r_pages: region(Page),
-	       damp: double,
-		page_num:uint64,
-                error_bound: double
-              )
+	            damp: double,
+		        page_num:uint64,
+                error_bound: double)
 where reads writes (r_pages) do
-    var sum = 0;
+    var sum:double = 0.0;
     for page in r_pages do
         sum += (page.rank - page.next_rank) * (page.rank - page.next_rank)
-	page.rank = page.next_rank
-	page.next_rank = (1 - damp)/page_num
+	    page.rank = page.next_rank
+	    page.next_rank = (1.0 - damp)/page_num
     end
     if sum < error_bound * error_bound then
         return true
@@ -93,8 +87,10 @@ end
 
 task pageRank(r_pages: region(Page),
               r_links: region(Link(r_pages))
-             )
-where reads r_pages, reads  r_links, writes r_pages do
+              damp: double)
+where reads writes (r_pages),
+    reads r_links
+do
     for link in r_links do
         link.dst.next_rank += link.src.rank / link.src.edge_num
     end
@@ -126,8 +122,8 @@ task toplevel()
   var r_pages = region(ispace(ptr, config.num_pages), Page)
   var r_links = region(ispace(ptr, config.num_links), Link(r_pages))
   -- where the hell is this specified
-  new(ptr(Page, r_pages), config.num_pages)
-  new(ptr(Link(r_pages), r_links), config.num_links)
+  --new(ptr(Page, r_pages), config.num_pages)
+  --new(ptr(Link(r_pages), r_links), config.num_links)
 
   -- Initialize the page graph from a file
   initialize_graph(r_pages, r_links, config.damp, config.num_pages, config.input)
