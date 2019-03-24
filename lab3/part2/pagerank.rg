@@ -101,9 +101,11 @@ do
 end
 
 task pageRank(r_pages: region(Page),
-             r_links: region(Link(r_pages)),
+              r_links: region(Link(r_pages)),
              )
-where reads (r_pages, r_links) writes r_pages
+where 
+    reads (r_pages, r_links),
+    writes r_pages
 do
     for link in r_links do
         link.dst.next_rank += link.src.rank / link.src.edge_num
@@ -137,11 +139,10 @@ task toplevel()
 
   -- Create a region of pages
   var r_pages = region(ispace(ptr, config.num_pages), Page)
-  --
-  -- TODO: Create a region of links.
-  --       It is your choice how you allocate the elements in this region.
-  --
   var r_links = region(ispace(ptr, config.num_links), Link(r_pages))
+  -- where the hell is this specified
+  new(ptr(Page, r_pages), config.num_pages)
+  new(ptr(Link(r_pages), r_links), config.num_links)
 
   -- Initialize the page graph from a file
   initialize_graph(r_pages, r_links, config.damp, config.num_pages, config.input)
@@ -151,10 +152,6 @@ task toplevel()
   var ts_start = c.legion_get_current_time_in_micros()
   while not converged do
     num_iterations += 1
-    --
-    -- TODO: Launch the tasks that you implemented above.
-    --       (and of course remove the break statement here.)
-    --
     pageRank(r_pages, r_links)
     var result = checkDiff(r_pages)
     if result or num_iterations > config.max_iterations then
