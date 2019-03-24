@@ -10,10 +10,9 @@ fspace Page {
   next_rank    : double;
 }
 
-fspace Link(r_src_pages : region(Page),
-            r_dst_pages : region(Page)) {
-  src_page : ptr(Page, r_src_pages);
-  dst_page : ptr(Page, r_dst_pages);
+fspace Link(r : region(Page)) {
+  src_page : ptr(Page, r);
+  dst_page : ptr(Page, r);
 }
 
 terra skip_header(f : &c.FILE)
@@ -27,7 +26,7 @@ end
 
 
 task initialize_graph(r_pages   : region(Page),
-                      r_links   : region(Link(r_pages, r_pages)),
+                      r_links   : region(Link(r_pages)),
                       damp      : double,
                       num_pages : uint64,
                       filename  : int8[512])
@@ -58,14 +57,13 @@ do
 end
 
 
-task rank_page(r_src_pages : region(Page),
-               r_dst_pages : region(Page),
-               r_links     : region(Link(r_src_pages, r_dst_pages)),
+task rank_page(r_pages : region(Page),
+               r_links     : region(Link(r_pages)),
                damp        : double)
 where
   reads(r_links.{src_page, dst_page}),
-  reads(r_src_pages.{rank, num_outlinks}),
-  reads writes(r_dst_pages.next_rank) -- TODO You might find reduce+ an alternative here.
+  reads(r_pages.{rank, num_outlinks}),
+  reads writes(r_pages.next_rank)
 do
   for link in r_links do
     link.dst_page.next_rank +=
@@ -115,7 +113,7 @@ task toplevel()
   c.printf("* Max # Iterations : %11d *\n",   config.max_iterations)
   c.printf("**********************************\n")
   var r_pages = region(ispace(ptr, config.num_pages), Page)
-  var r_links = region(ispace(ptr, config.num_links), Link(wild, wild))
+  var r_links = region(ispace(ptr, config.num_links), Link( wild))
   --new(ptr(Page, r_pages), config.num_pages)
   --new(ptr(Link(r_pages), r_links), config.num_links)
 
@@ -130,7 +128,9 @@ task toplevel()
   while not converged do
     num_iterations += 1
     var sum_error = 0.0
-    break
+    rank_page(r_pages, r_links, config.damp)
+    var res = calculate_squared_error(r_pages, config.damp, config.num_pages)
+    converged = res <= config.error_bound*config.error_bound or num_iterations >= config.max_iterations
   end
   var ts_stop = c.legion_get_current_time_in_micros()
   c.printf("PageRank converged after %d iterations in %.4f sec\n",

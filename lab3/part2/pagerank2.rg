@@ -86,7 +86,7 @@ where reads writes (r_pages) do
 end
 
 task pageRank(r_pages: region(Page),
-              r_links: region(Link(r_pages))
+              r_links: region(Link(r_pages)),
               damp: double)
 where reads writes (r_pages),
     reads r_links
