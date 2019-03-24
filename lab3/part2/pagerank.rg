@@ -6,10 +6,9 @@ local PageRankConfig = require("pagerank_config")
 local c = regentlib.c
 
 fspace Page {
-  rank         : double;
-  --
-  -- TODO: Add more fields as you need.
-  --
+  rank         : double,
+  next_rank : double,
+  edge_num : int
 }
 
 --
@@ -17,8 +16,8 @@ fspace Page {
 --       one that points to the source and another to the destination.
 --
 fspace Link(r: region(Page)) {
-src: ptr(Page, r)
-dst: ptr(Page, r)
+    src: ptr(Page, r),
+    dst: ptr(Page, r)
 }
 
 terra skip_header(f : &c.FILE)
@@ -33,8 +32,9 @@ end
 task initialize_graph(r_pages   : region(Page),
                       --
                       -- TODO: Give the right region type here.
+                      -- interesting definition here
                       --
-                      r_links   : region(Link(...)),
+                      r_links   : region(Link(r_pages)),
                       damp      : double,
                       num_pages : uint64,
                       filename  : int8[512])
@@ -45,6 +45,7 @@ do
   for page in r_pages do
     page.rank = 1.0 / num_pages
     -- TODO: Initialize your fields if you need
+    page.edge_num = 0
   end
 
   var f = c.fopen(filename, "rb")
@@ -59,6 +60,8 @@ do
     --
     link.src = src_page
     link.dst = dst_page
+
+    src_page.edge_num += 1
   end
   c.fclose(f)
   var ts_stop = c.legion_get_current_time_in_micros()
@@ -68,6 +71,46 @@ end
 --
 -- TODO: Implement PageRank. You can use as many tasks as you want.
 --
+
+task resetNextRank(r_pages: region(Page), 
+                    damp: double, 
+                    page_num: uint64)
+where reads writes r_pages
+do
+    for page in r_pages do
+        page.rank = page.next_rank
+        page.next_rank = (1 - damp)/page_num
+    end
+end
+
+task checkDiff(r_pages: region(Page),
+                error_bound: double
+              )
+where reads r_pages
+do
+    var sum = 0;
+    for page in r_pages do
+        sum += (page.rank - page.next_rank) * (page.rank - page.next_rank)
+    end
+    resetNextRand()
+    if sum < error_bound * error_bound then
+        return true
+    else
+        return false
+    end
+end
+
+task pageRank(r_pages: region(Page),
+             r_links: region(Link(r_pages)),
+             )
+where reads (r_pages, r_links) writes r_pages
+do
+    for link in r_links do
+        link.dst.next_rank += link.src.rank / link.src.edge_num
+    end
+
+end
+
 
 task dump_ranks(r_pages  : region(Page),
                 filename : int8[512])
@@ -98,7 +141,7 @@ task toplevel()
   -- TODO: Create a region of links.
   --       It is your choice how you allocate the elements in this region.
   --
-  var r_links = region(ispace(ptr, config.num_links), Link(wild))
+  var r_links = region(ispace(ptr, config.num_links), Link(r_pages))
 
   -- Initialize the page graph from a file
   initialize_graph(r_pages, r_links, config.damp, config.num_pages, config.input)
@@ -112,7 +155,11 @@ task toplevel()
     -- TODO: Launch the tasks that you implemented above.
     --       (and of course remove the break statement here.)
     --
-    break
+    pageRank(r_pages, r_links)
+    var result = checkDiff(r_pages)
+    if result or num_iterations > config.max_iterations then
+        break
+    end
   end
   var ts_stop = c.legion_get_current_time_in_micros()
   c.printf("PageRank converged after %d iterations in %.4f sec\n",
