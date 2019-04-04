@@ -7,17 +7,16 @@ local PageRankConfig = require("pagerank_config")
 local c = regentlib.c
 
 fspace Page {
+  num_outlinks : uint32;
   rank         : double;
-  --
-  -- TODO: Add more fields as you need.
-  --
+  next_rank    : double;
 }
 
---
--- TODO: Define fieldspace 'Link' which has two pointer fields,
---       one that points to the source and another to the destination.
---
--- fspace Link(...) { ... }
+fspace Link(r_src : region(Page), r_dst : region(Page)) {
+  src_page : ptr(Page, r_src);
+  dst_page : ptr(Page, r_dst);
+}
+
 
 terra skip_header(f : &c.FILE)
   var x : uint64, y : uint64
@@ -29,10 +28,7 @@ terra read_ids(f : &c.FILE, page_ids : &uint32)
 end
 
 task initialize_graph(r_pages   : region(Page),
-                      --
-                      -- TODO: Give the right region type here.
-                      --
-                      r_links   : region(Link(...)),
+                      r_links   : region(Link(r_pages), Link(r_pages)),
                       damp      : double,
                       num_pages : uint64,
                       filename  : int8[512])
@@ -42,7 +38,8 @@ do
   var ts_start = c.legion_get_current_time_in_micros()
   for page in r_pages do
     page.rank = 1.0 / num_pages
-    -- TODO: Initialize your fields if you need
+    page.next_rank = (1.0 - damp)/num_pages
+    page.num_outlinks = 0
   end
 
   var f = c.fopen(filename, "rb")
@@ -52,9 +49,9 @@ do
     regentlib.assert(read_ids(f, page_ids), "Less data that it should be")
     var src_page = dynamic_cast(ptr(Page, r_pages), page_ids[0])
     var dst_page = dynamic_cast(ptr(Page, r_pages), page_ids[1])
-    --
-    -- TODO: Initialize the link with 'src_page' and 'dst_page'
-    --
+    link.src_page = src_page
+    link.dst_page = dst_page
+    src_page.num_outlinks += 1
   end
   c.fclose(f)
   var ts_stop = c.legion_get_current_time_in_micros()
@@ -64,6 +61,38 @@ end
 --
 -- TODO: Implement PageRank. You can use as many tasks as you want.
 --
+task rank_page(r_src_pages : region(Page),
+               r_dst_pages : region(Page),
+               r_links : region(Link(r_src_pages, r_dst_pages)),
+               damp : double)
+where
+    reads(rlinks.{src_page, dst_page}),
+    reads(r_src_page.{rank,num_outlinks}),
+    writes(r_dst_page.{next_rank})
+do
+    for link in rlinks do
+        link.dst_page.next_rank +=
+            damp * link.src_page.rank / link.src_page.num_outlinks
+    end
+end
+
+task update_rank(r_pages : region(Page),
+                 damp : double,
+                 num_pages : uint64)
+where
+    reads writes(r_pages.{rank, next_rank})
+do
+    var sum_error : double = 0.0
+    for page in r_pages do
+        sum_error += (page.rank - page.next_rank) * 
+                     (page.rank - page.next_rank)
+        page.rank = page.next_rank
+        page.next_rank = (1.0 - damp)/num_pages
+    end
+    return sum_error
+end
+
+
 
 task dump_ranks(r_pages  : region(Page),
                 filename : int8[512])
@@ -105,6 +134,14 @@ task toplevel()
   -- Initialize the page graph from a file
   initialize_graph(r_pages, r_links, config.damp, config.num_pages, config.input)
 
+  var allcolors = ispace(int1d, config.parallelism)
+  var sublinks = partition(equal, r_links, allcolors)
+  var src_nodes = image(r_pages, sublinks, src_page)
+  var dst_nodes = image(r_pages, sublinks, dst_page)
+
+  var subpages = partition(equal, r_pages, allcolors)
+  
+
   var num_iterations = 0
   var converged = false
   __fence(__execution, __block) -- This blocks to make sure we only time the pagerank computation
@@ -112,10 +149,17 @@ task toplevel()
   while not converged do
     num_iterations += 1
     --
-    -- TODO: Launch the tasks that you implemented above.
-    --       (and of course remove the break statement here.)
-    --
-    break
+    for color in allcolors do
+        rank_page(src_nodes[color], dst_nodes[color], sublinks[color], config.damp)
+    end
+    -- need a sync here(interesting, the sync happens excplicitly)
+    val res:double = 0.0
+    for color in allcolors do
+        -- how to express a tree-reduction?
+        res += update_rank(subpages[color], config.damp, config.num_pages)
+    end
+    converged = (res <= config.error_bound * config.error_bound) or
+                (num_interations >= config.max_iterations)
   end
   __fence(__execution, __block) -- This blocks to make sure we only time the pagerank computation
   var ts_stop = c.legion_get_current_time_in_micros()
