@@ -72,7 +72,7 @@ do
 end
 
 
-task calculate_squared_error(r_pages     : region(Page),
+task update_rank(r_pages     : region(Page),
                              damp        : double,
                              num_pages   : uint64)
 where
@@ -129,7 +129,7 @@ task toplevel()
     num_iterations += 1
     var sum_error = 0.0
     rank_page(r_pages, r_links, config.damp)
-    var res = calculate_squared_error(r_pages, config.damp, config.num_pages)
+    var res = update_rank(r_pages, config.damp, config.num_pages)
     converged = res <= config.error_bound*config.error_bound or num_iterations >= config.max_iterations
   end
   var ts_stop = c.legion_get_current_time_in_micros()

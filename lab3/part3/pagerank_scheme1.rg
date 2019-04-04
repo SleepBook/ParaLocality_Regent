@@ -1,3 +1,4 @@
+-- Partation by edges
 import "regent"
 
 -- Helper module to handle command line arguments
