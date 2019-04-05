@@ -17,6 +17,10 @@ fspace Link(r_src : region(Page), r_dst : region(Page)) {
   dst_page : ptr(Page, r_dst);
 }
 
+fspace ErrSum{
+    sum : double;
+}
+
 
 terra skip_header(f : &c.FILE)
   var x : uint64, y : uint64
@@ -79,10 +83,10 @@ end
 task update_rank(r_pages : region(Page),
                  damp : double,
                  num_pages : uint64, 
-		err: double)
+	             res: region(ispace(int1d), ErrSum))
 where
     reads writes(r_pages.{rank, next_rank}),
-    reduces+(err)
+    reduces+(res.sum)
 do
     var sum_error : double = 0.0
     for page in r_pages do
@@ -91,7 +95,7 @@ do
         page.rank = page.next_rank
         page.next_rank = (1.0 - damp)/num_pages
     end
-    err += sum_error 
+    res[0].sum += sum_error 
 end
 
 
@@ -143,6 +147,7 @@ task toplevel()
 
   var subpages = partition(equal, r_pages, allcolors)
   
+  var res = region(ispace(int1d, 1), ErrSum)
 
   var num_iterations = 0
   var converged = false
@@ -156,13 +161,11 @@ task toplevel()
     end
 
     -- need a sync here(interesting, the sync happens excplicitly)
-    var res:double = 0.0
-    var res = region(ispace(int1d, 1), double)
     for color in allcolors do
         -- how to express a tree-reduction?
-        update_rank(subpages[color], config.damp, config.num_pages, res[0])
+        update_rank(subpages[color], config.damp, config.num_pages, res)
     end
-    converged = (res <= config.error_bound * config.error_bound) or
+    converged = (res[0].sum <= config.error_bound * config.error_bound) or
                 (num_iterations >= config.max_iterations)
   end
   __fence(__execution, __block) -- This blocks to make sure we only time the pagerank computation
