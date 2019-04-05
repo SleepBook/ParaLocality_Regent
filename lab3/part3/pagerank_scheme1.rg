@@ -28,7 +28,7 @@ terra read_ids(f : &c.FILE, page_ids : &uint32)
 end
 
 task initialize_graph(r_pages   : region(Page),
-                      r_links   : region(Link(r_pages), Link(r_pages)),
+                      r_links   : region(Link(r_pages, r_pages)),
                       damp      : double,
                       num_pages : uint64,
                       filename  : int8[512])
@@ -66,11 +66,11 @@ task rank_page(r_src_pages : region(Page),
                r_links : region(Link(r_src_pages, r_dst_pages)),
                damp : double)
 where
-    reads(rlinks.{src_page, dst_page}),
-    reads(r_src_page.{rank,num_outlinks}),
-    writes(r_dst_page.{next_rank})
+    reads(r_links.{src_page, dst_page}),
+    reads(r_src_pages.{rank,num_outlinks}),
+    reads writes(r_dst_pages.{next_rank})
 do
-    for link in rlinks do
+    for link in r_links do
         link.dst_page.next_rank +=
             damp * link.src_page.rank / link.src_page.num_outlinks
     end
@@ -124,7 +124,7 @@ task toplevel()
   -- TODO: Create a region of links.
   --       It is your choice how you allocate the elements in this region.
   --
-  var r_links = region(ispace(ptr, config.num_links), Link(wild))
+  var r_links = region(ispace(ptr, config.num_links), Link(wild, wild))
 
   --
   -- TODO: Create partitions for links and pages.
@@ -136,8 +136,8 @@ task toplevel()
 
   var allcolors = ispace(int1d, config.parallelism)
   var sublinks = partition(equal, r_links, allcolors)
-  var src_nodes = image(r_pages, sublinks, src_page)
-  var dst_nodes = image(r_pages, sublinks, dst_page)
+  var src_nodes = image(r_pages, sublinks, r_links.src_page)
+  var dst_nodes = image(r_pages, sublinks, r_links.dst_page)
 
   var subpages = partition(equal, r_pages, allcolors)
   
@@ -152,14 +152,15 @@ task toplevel()
     for color in allcolors do
         rank_page(src_nodes[color], dst_nodes[color], sublinks[color], config.damp)
     end
+
     -- need a sync here(interesting, the sync happens excplicitly)
-    val res:double = 0.0
+    var res:double = 0.0
     for color in allcolors do
         -- how to express a tree-reduction?
         res += update_rank(subpages[color], config.damp, config.num_pages)
     end
     converged = (res <= config.error_bound * config.error_bound) or
-                (num_interations >= config.max_iterations)
+                (num_iterations >= config.max_iterations)
   end
   __fence(__execution, __block) -- This blocks to make sure we only time the pagerank computation
   var ts_stop = c.legion_get_current_time_in_micros()
