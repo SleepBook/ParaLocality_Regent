@@ -78,9 +78,11 @@ end
 
 task update_rank(r_pages : region(Page),
                  damp : double,
-                 num_pages : uint64)
+                 num_pages : uint64, 
+		err: double)
 where
-    reads writes(r_pages.{rank, next_rank})
+    reads writes(r_pages.{rank, next_rank}),
+    reduces+(err)
 do
     var sum_error : double = 0.0
     for page in r_pages do
@@ -89,7 +91,7 @@ do
         page.rank = page.next_rank
         page.next_rank = (1.0 - damp)/num_pages
     end
-    return sum_error
+    err += sum_error 
 end
 
 
@@ -155,9 +157,10 @@ task toplevel()
 
     -- need a sync here(interesting, the sync happens excplicitly)
     var res:double = 0.0
+    var res = region(ispace(int1d, 1), double)
     for color in allcolors do
         -- how to express a tree-reduction?
-        res += update_rank(subpages[color], config.damp, config.num_pages)
+        update_rank(subpages[color], config.damp, config.num_pages, res[0])
     end
     converged = (res <= config.error_bound * config.error_bound) or
                 (num_iterations >= config.max_iterations)
