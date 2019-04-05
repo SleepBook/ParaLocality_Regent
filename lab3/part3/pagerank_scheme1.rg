@@ -81,12 +81,13 @@ do
 end
 
 task update_rank(r_pages : region(Page),
+		 pid: uint,
                  damp : double,
                  num_pages : uint64, 
-	             res: region(ispace(int1d), ErrSum))
+	         res: region(ispace(int1d), ErrSum))
 where
     reads writes(r_pages.{rank, next_rank}),
-    reduces+(res.sum)
+    writes(res.sum)
 do
     var sum_error : double = 0.0
     for page in r_pages do
@@ -95,10 +96,22 @@ do
         page.rank = page.next_rank
         page.next_rank = (1.0 - damp)/num_pages
     end
-    res[0].sum += sum_error 
+    res[pid].sum = sum_error 
 end
 
-
+--terra sumError(res: region(ispace(int1d), ErrSum),
+task sumError(res: region(ispace(int1d), ErrSum),
+	       iter: uint)
+where
+	reads (res.sum)
+do
+	var sum:double  = 0.0
+	for i=1, iter do
+		sum = sum + res[i].sum
+	end
+	return sum
+end
+	
 
 task dump_ranks(r_pages  : region(Page),
                 filename : int8[512])
@@ -147,7 +160,7 @@ task toplevel()
 
   var subpages = partition(equal, r_pages, allcolors)
   
-  var res = region(ispace(int1d, 1), ErrSum)
+  var res = region(ispace(int1d, config.parallelism), ErrSum)
 
   var num_iterations = 0
   var converged = false
@@ -163,9 +176,10 @@ task toplevel()
     -- need a sync here(interesting, the sync happens excplicitly)
     for color in allcolors do
         -- how to express a tree-reduction?
-        update_rank(subpages[color], config.damp, config.num_pages, res)
+        update_rank(subpages[color], color, config.damp, config.num_pages, res)
     end
-    converged = (res[0].sum <= config.error_bound * config.error_bound) or
+    var err = sumError(res, config.parallelism)
+    converged = (err <= config.error_bound * config.error_bound) or
                 (num_iterations >= config.max_iterations)
   end
   __fence(__execution, __block) -- This blocks to make sure we only time the pagerank computation
